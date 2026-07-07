@@ -227,3 +227,27 @@ Then I opened the playlist songs endpoint:
 The seed data creates playlists with multiple songs. I expected the playlist endpoint to return all songs in the playlist.
 
 Instead, the endpoint returned one fewer song than expected. The final song in the playlist order was missing. This confirmed Issue #5 before I changed any code.
+
+#### How I Found the Root Cause
+
+I started from the route `GET /playlists/<playlist_id>/songs` in `routes/playlists.py`, which calls `playlist_service.get_playlist_songs()`. The README lists Issue #5 as belonging to `playlist_service.py`.
+
+The query itself looked correct: it joins `Song` to the `playlist_entries` association table, filters by `playlist_id`, and orders by `position` ascending. Since the data and ordering were right but the count was short by exactly one, I focused on how the result list was returned rather than how it was queried.
+
+#### The Root Cause
+
+The service sliced the ordered result with `songs[:-1]` before serializing:
+
+`return [song.to_dict() for song in songs[:-1]]`
+
+`[:-1]` drops the last element of the list. Because the songs were ordered by ascending `position`, the dropped element was always the final song in the playlist. This is why every playlist returned exactly one fewer song, with the last one missing, even though the query returned the complete, correctly ordered set.
+
+#### My Fix and Side-Effect Check
+
+I removed the slice so all songs are returned:
+
+`return [song.to_dict() for song in songs]`
+
+The query, join, filter, and ordering were already correct, so no other logic needed to change.
+
+After the fix, I reran `python seed_data.py`, restarted the Flask app, and checked `GET /playlists/<playlist_id>/songs` for the seeded playlists (which have 5–7 songs each). The endpoint now returns all songs in ascending position order, including the final song. I also confirmed that an empty playlist returns an empty list rather than erroring, since `[:-1]` on an empty list and the fixed version both yield `[]`.
