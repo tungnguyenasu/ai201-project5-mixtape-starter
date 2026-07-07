@@ -122,8 +122,9 @@ If one of these is harder to reproduce than expected, I may switch to Issue #2 b
 
 I will complete one section like this for each bug I fix.
 
-**Issue #1: My listening streak keeps resetting**
-How I Reproduced It
+### Issue #1: My listening streak keeps resetting
+
+#### How I Reproduced It
 
 I reproduced this bug after running python seed_data.py, starting the Flask app, and checking the seeded users' streak data.
 
@@ -145,7 +146,7 @@ with this JSON body:
 
 After the listen request, I checked Nova's streak again using the same streak endpoint. The streak changed unexpectedly instead of preserving or continuing the existing streak correctly. This confirmed the streak reset behavior before I changed any code.
 
-How I Found the Root Cause
+#### How I Found the Root Cause
 
 I started from the route that records a listening event: POST /songs/<song_id>/listen in routes/songs.py. That route calls record_listening_event() from services/streak_service.py.
 
@@ -153,20 +154,21 @@ I followed the logic in streak_service.py because the README lists Issue #1 as b
 
 The key clue was the weekday check. The code was using Python's weekday numbering incorrectly.
 
-The Root Cause
+#### The Root Cause
 
 The streak reset logic was checking the wrong weekday value for the week boundary. Python's datetime.weekday() returns 0 for Monday and 6 for Sunday. The code treated weekday() == 0 as the Sunday/week-boundary case, but that condition actually matches Monday.
 
 Because of that mismatch, the streak logic reset or preserved streaks on the wrong day. A user listening around the Sunday boundary could have their streak handled incorrectly.
 
-My Fix and Side-Effect Check
+#### My Fix and Side-Effect Check
 
 I changed the weekday check so Sunday is detected correctly. I used isoweekday() == 7, which is clearer because ISO weekday represents Sunday as 7.
 
 After the change, I reran the seed script, restarted the Flask app, triggered a listening event with POST /songs/<song_id>/listen, and checked the user streak again with GET /users/<user_id>/streak. I also checked that normal same-day listening still did not incorrectly reset the streak.
 
-Issue #2: Friends Listening Now shows people from yesterday
-How I Reproduced It
+### Issue #2: Friends Listening Now shows people from yesterday
+
+#### How I Reproduced It
 
 I reproduced this bug after running python seed_data.py, starting the Flask app, and using the listening-now feed endpoint.
 
@@ -178,7 +180,7 @@ The seed data creates recent listening events that should appear in the listenin
 
 When I checked the endpoint response, I saw listening activity that was too old to count as “listening now.” This confirmed the bug that the feed includes stale listening events before I changed any code.
 
-How I Found the Root Cause
+#### How I Found the Root Cause
 
 I started from the route shown by flask routes:
 
@@ -188,7 +190,7 @@ Then I traced that route into services/feed_service.py, because the README ident
 
 I looked for the query that retrieves listening events for a user's friends. The suspicious part was the timestamp filter because the bug was not about missing data; it was about old data being included.
 
-The Root Cause
+#### The Root Cause
 
 The listening-now query already computed a cutoff correctly (`cutoff = datetime.now(timezone.utc) - RECENT_THRESHOLD`) and filtered with `ListeningEvent.listened_at >= cutoff`. The problem was the value of the `RECENT_THRESHOLD` constant in `feed_service.py`:
 
@@ -196,7 +198,7 @@ RECENT_THRESHOLD = timedelta(hours=24)
 
 A 24-hour window meant any friend who had listened at any point in the past day was treated as "listening now," so stale events from yesterday or many hours ago showed up in the feed.
 
-My Fix and Side-Effect Check
+#### My Fix and Side-Effect Check
 
 I changed the single `RECENT_THRESHOLD` constant from 24 hours to 5 minutes:
 
