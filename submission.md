@@ -165,19 +165,50 @@ I changed the weekday check so Sunday is detected correctly. I used isoweekday()
 
 After the change, I reran the seed script, restarted the Flask app, triggered a listening event with POST /songs/<song_id>/listen, and checked the user streak again with GET /users/<user_id>/streak. I also checked that normal same-day listening still did not incorrectly reset the streak.
 
-### Issue #2: Friends Listening Now shows people from yesterday
+Issue #2: Friends Listening Now shows people from yesterday
+How I Reproduced It
 
-#### How I Reproduced It
+I reproduced this bug after running python seed_data.py, starting the Flask app, and using the listening-now feed endpoint.
 
-I reproduced this bug after running `python seed_data.py`, starting the Flask app, and using the listening-now feed endpoint.
+I used the seeded user nova because Nova has several friends in the seed data:
 
-I used one of the seeded users with friends, such as `nova`, and opened:
+GET /feed/dbb89ea6-3d69-499a-85fa-a3e5586040e1/listening-now
 
-`GET /feed/<user_id>/listening-now`
-
-The seed data creates recent listening events from the past 30 minutes, which should appear in the listening-now feed. It also creates older listening events from hours or days earlier, which should not appear as currently listening.
+The seed data creates recent listening events that should appear in the listening-now feed, but it also creates older listening events that should not appear as currently listening.
 
 When I checked the endpoint response, I saw listening activity that was too old to count as “listening now.” This confirmed the bug that the feed includes stale listening events before I changed any code.
+
+How I Found the Root Cause
+
+I started from the route shown by flask routes:
+
+GET /feed/<user_id>/listening-now
+
+Then I traced that route into services/feed_service.py, because the README identifies Issue #2 as belonging to feed_service.py.
+
+I looked for the query that retrieves listening events for a user's friends. The suspicious part was the timestamp filter because the bug was not about missing data; it was about old data being included.
+
+The Root Cause
+
+The listening-now query already computed a cutoff correctly (`cutoff = datetime.now(timezone.utc) - RECENT_THRESHOLD`) and filtered with `ListeningEvent.listened_at >= cutoff`. The problem was the value of the `RECENT_THRESHOLD` constant in `feed_service.py`:
+
+RECENT_THRESHOLD = timedelta(hours=24)
+
+A 24-hour window meant any friend who had listened at any point in the past day was treated as "listening now," so stale events from yesterday or many hours ago showed up in the feed.
+
+My Fix and Side-Effect Check
+
+I changed the single `RECENT_THRESHOLD` constant from 24 hours to 5 minutes:
+
+RECENT_THRESHOLD = timedelta(minutes=5)
+
+The existing cutoff computation and filter were already correct, so no other logic needed to change. This narrows the window so only friends who listened in the last 5 minutes appear.
+
+After the fix, I reran the seed script and checked:
+
+GET /feed/<user_id>/listening-now
+
+The response only included recent listening events and no longer included stale events from hours ago or yesterday. I also confirmed `get_activity_feed()` was left untouched, since that feed is intentionally not filtered by recency, and that recent seed events still appeared so the feed was not over-filtered.
 
 ### Issue #5: The last song in a playlist never shows up
 
