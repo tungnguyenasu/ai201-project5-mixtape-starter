@@ -2,7 +2,20 @@
 
 ## AI Usage
 
-For Milestone 1, I used AI to help organize my codebase map after reading the starter project files. I used AI to summarize the responsibilities of the uploaded files, connect the README structure to the actual Flask app setup, and write a clearer first draft of my `submission.md`. I still verified the structure by reading the files myself, especially `README.md`, `app.py`, `models.py`, and `seed_data.py`.
+I used an AI assistant (Claude Code) throughout this project, mostly as a navigation and explanation tool rather than a code generator. Being specific about how:
+
+**Codebase navigation.** Before touching any bug, I had the AI walk me through the project layer by layer. I asked it to explain what `models.py` defines (the SQLAlchemy tables and their relationships), what the `routes/` blueprints do, and how a request flows from a route into the matching `services/` function and down to the models. This gave me the route → service → model mental model quickly. I also had it trace specific flows end to end — for example `POST /songs/<id>/listen` → `record_listening_event()` → `update_listening_streak()`, and `GET /playlists/<id>/songs` → `get_playlist_songs()`. I confirmed every claim by opening the files myself (`app.py`, `models.py`, `seed_data.py`, and the individual service files) rather than trusting the summary.
+
+**Debugging.** For each bug I fixed, I used the AI to help locate the exact line and explain why it was wrong: the `RECENT_THRESHOLD = timedelta(hours=24)` window in `feed_service.py` (Issue #2), the `songs[:-1]` slice in `get_playlist_songs()` (Issue #5), and the streak-increment condition in `update_listening_streak()` (Issue #1). It was most useful for narrowing down where to look from the symptom — e.g. "one fewer song than expected" pointing at a slicing/off-by-one problem rather than the query.
+
+**Where I had to verify or correct the AI.** The collaboration was not hands-off:
+
+* Its first explanation of the streak bug was wrong. It described the original condition as `weekday() == 0` and proposed a fix using `isoweekday() == 7`. When I checked the actual code with `git show` on the fix commit, the real bug was an extra `and today.weekday() != 6` condition, and the correct fix was to delete that condition entirely — not to change a comparison value. I rewrote the Issue #1 root-cause entry to match the real code.
+* It surfaced extra "bugs" beyond the five assigned issues (for example a possible NOT NULL failure when adding a song to a playlist through the association table). These were speculative and out of scope, so I set them aside instead of acting on them.
+* When I asked it to make the formatting of the issue write-ups consistent, it applied the change in the wrong direction the first time and I had to correct it.
+* I did the reproduction and verification myself — running `seed_data.py`, starting the Flask app, and hitting the endpoints — rather than relying on the AI's assertion that a fix worked.
+
+Overall the AI was most valuable for orientation (understanding an unfamiliar codebase fast) and for explaining suspect code, but I treated its explanations as leads to verify, not conclusions — and at least once it was confidently wrong.
 
 ## Milestone 1: Codebase Map
 
@@ -150,21 +163,31 @@ After the listen request, I checked Nova's streak again using the same streak en
 
 I started from the route that records a listening event: POST /songs/<song_id>/listen in routes/songs.py. That route calls record_listening_event() from services/streak_service.py.
 
-I followed the logic in streak_service.py because the README lists Issue #1 as belonging to streak_service.py. I focused on the date comparison and weekly boundary logic because the bug happened around streak reset behavior.
+I followed the logic in `streak_service.py` because the README lists Issue #1 as belonging to that file. I focused on `update_listening_streak()`, which decides whether to increment, keep, or reset the streak.
 
-The key clue was the weekday check. The code was using Python's weekday numbering incorrectly.
+The key clue was in the branch that increments the streak. Besides checking that exactly one day had passed since the last listen, it carried an extra condition tied to the current day of the week, which has nothing to do with the documented streak rules.
 
 #### The Root Cause
 
-The streak reset logic was checking the wrong weekday value for the week boundary. Python's datetime.weekday() returns 0 for Monday and 6 for Sunday. The code treated weekday() == 0 as the Sunday/week-boundary case, but that condition actually matches Monday.
+The branch that increments the streak read:
 
-Because of that mismatch, the streak logic reset or preserved streaks on the wrong day. A user listening around the Sunday boundary could have their streak handled incorrectly.
+`elif days_since_last == 1 and today.weekday() != 6:`
+`    user.listening_streak += 1`
+
+Python's `datetime.weekday()` returns `6` for Sunday. The extra `and today.weekday() != 6` meant that whenever "today" was a Sunday, a user who had listened the day before — a valid consecutive-day streak — failed this condition and fell through to the `else` branch, which resets the streak to `1`. In effect, every Sunday wiped out an otherwise-valid streak.
+
+The documented rules say a listen on a consecutive calendar day should always increment the streak regardless of which day of the week it is, so this weekday condition should not have been in the code at all.
 
 #### My Fix and Side-Effect Check
 
-I changed the weekday check so Sunday is detected correctly. I used isoweekday() == 7, which is clearer because ISO weekday represents Sunday as 7.
+I removed the spurious weekday condition so the branch is simply:
 
-After the change, I reran the seed script, restarted the Flask app, triggered a listening event with POST /songs/<song_id>/listen, and checked the user streak again with GET /users/<user_id>/streak. I also checked that normal same-day listening still did not incorrectly reset the streak.
+`elif days_since_last == 1:`
+`    user.listening_streak += 1`
+
+Now a listen exactly one calendar day after the previous one increments the streak on any day, including Sunday.
+
+`update_listening_streak()` has only three paths — same day (`days_since_last == 0`, no change), consecutive day (`== 1`, increment), and a larger gap (`else`, reset to `1`). My change only affects the consecutive-day path, so the other two are unchanged. After the fix I reran `python seed_data.py`, restarted the Flask app, triggered a listen with `POST /songs/<song_id>/listen`, and re-checked `GET /users/<user_id>/streak`: a consecutive-day listen now increments on a Sunday instead of resetting, a same-day repeat listen still leaves the streak unchanged, and a gap of two or more days still resets to 1.
 
 ### Issue #2: Friends Listening Now shows people from yesterday
 
