@@ -223,17 +223,17 @@ A 24-hour window meant any friend who had listened at any point in the past day 
 
 #### My Fix and Side-Effect Check
 
-I changed the single `RECENT_THRESHOLD` constant from 24 hours to 5 minutes:
+I changed the single `RECENT_THRESHOLD` constant from 24 hours to 30 minutes:
 
-RECENT_THRESHOLD = timedelta(minutes=5)
+RECENT_THRESHOLD = timedelta(minutes=30)
 
-The existing cutoff computation and filter were already correct, so no other logic needed to change. This narrows the window so only friends who listened in the last 5 minutes appear.
+The existing cutoff computation and filter were already correct, so no other logic needed to change. This narrows the window so only friends who listened in the last 30 minutes appear. I picked 30 minutes to match the seed data: `seed_data.py` creates the "currently listening" friends 10–20 minutes ago (commented "within the past 30 minutes — should appear") and the stale ones 2+ hours ago. I first tried 5 minutes, but reran the seed and saw the listening-now feed come back empty because even those recent friends fell outside the window, so 30 minutes is the value that keeps genuinely-recent listeners while dropping yesterday's.
 
-After the fix, I reran the seed script and checked:
+After the fix, I reran `python seed_data.py` and checked:
 
 GET /feed/<user_id>/listening-now
 
-The response only included recent listening events and no longer included stale events from hours ago or yesterday. I also confirmed `get_activity_feed()` was left untouched, since that feed is intentionally not filtered by recency, and that recent seed events still appeared so the feed was not over-filtered.
+For nova, the feed returned her three recently-listening friends (darius, simone, kenji at 10/15/20 minutes ago) and no longer included the stale events from hours ago or yesterday. I also confirmed `get_activity_feed()` was left untouched, since that feed is intentionally not filtered by recency.
 
 ### Issue #5: The last song in a playlist never shows up
 
